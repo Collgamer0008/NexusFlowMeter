@@ -17,17 +17,17 @@ Usage:
     python pcap_to_flows.py input.pcap output.csv --quick-preview 10
 """
 
-import argparse
-import csv
+# import argparse
+# import csv
 import sys
 import os
-import json
+# import json
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 import logging
-import math
-from collections import defaultdict
+# import math
+# from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
