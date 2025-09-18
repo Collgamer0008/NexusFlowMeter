@@ -2,8 +2,10 @@ name: Python Package CI/CD
 
 on:
   push:
+    branches:
+      - main    # triggers on every push to main
     tags:
-      - 'v*.*.*'   # Trigger only on version tags like v1.0.0
+      - 'v*.*.*'   # still triggers for tags
   pull_request:
     branches:
       - main
