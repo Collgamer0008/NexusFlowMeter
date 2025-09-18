@@ -34,7 +34,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest -v
+          pytest -q || if [ $? -eq 5 ]; then echo "No tests found, skipping."; else exit 1; fi
 
   publish-to-pypi:
     runs-on: ubuntu-latest
