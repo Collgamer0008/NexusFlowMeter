@@ -490,7 +490,7 @@ class PCAPToFlowConverter:
         all_flows = {}
 
         # Prepare arguments for parallel processing
-        worker_args = [(chunk_file, protocols, max_flows) for chunk_file in chunk_files]
+        worker_args = [(chunk_file, protocols, max_flows,stream) for chunk_file in chunk_files]
 
         # Process chunks in parallel
         with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
@@ -498,7 +498,7 @@ class PCAPToFlowConverter:
 
             # Correctly submit each worker with unpacked args
             future_to_chunk = {}
-            for (chunk_file, prot, mflows) in worker_args:
+            for (chunk_file, prot, mflows, stream) in worker_args:
                 future = executor.submit(process_chunk_worker, chunk_file, prot, mflows,stream)
                 future_to_chunk[future] = chunk_file
 
@@ -674,6 +674,7 @@ class PCAPToFlowConverter:
                 all_flows = self.process_chunks_parallel(chunk_files, stream, protocols, max_flows)
             
             else:
+                all_flows = {}
                 # Sequential path (existing behavior)
                 print("Running sequential flow conversion...")
                 for i, chunk_file in enumerate(chunk_files, 1):
