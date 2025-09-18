@@ -1,3 +1,14 @@
+import sys
+import os
+import logging
+import argparse
+import multiprocessing
+from pathlib import Path
+from datetime import datetime
+
+# Import your PCAPToFlowConverter class
+from nexusflowmeter.converter import PCAPToFlowConverter
+
 def main():
     """Main function to handle command line arguments and run the flow analyzer."""
     parser = argparse.ArgumentParser(
