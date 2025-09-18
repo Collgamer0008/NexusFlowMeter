@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexusflowmeter"
+version = "0.1.0"
+description = "Convert PCAP files to flow-based analysis (CSV, JSON, Excel)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+authors = [
+  { name = "Ashwin", email = "ashwinkulkarni737@gmail.com" }
+]
+dependencies = [
+  "scapy",
+  "pandas",
+  "openpyxl"
+]
+
+
+[project.scripts]
+nexusflowmeter = "nexusflowmeter.cli:main"
