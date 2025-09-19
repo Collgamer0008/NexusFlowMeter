@@ -30,6 +30,9 @@ import logging
 # from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
+import glob
+import pandas as pd
+
 
 try:
     from scapy.all import PcapReader, rdpcap, IP, IPv6, TCP, UDP, ICMP, ARP, DNS, wrpcap
@@ -478,8 +481,6 @@ class PCAPToFlowConverter:
                 
         return filtered_flows
 
-
-    
 
 
 

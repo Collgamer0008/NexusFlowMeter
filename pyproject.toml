@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexusflowmeter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Convert PCAP files to flow-based analysis (CSV, JSON, Excel)"
 readme = "README.md"
 requires-python = ">=3.8"
