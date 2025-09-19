@@ -877,7 +877,7 @@ class PCAPToFlowConverter:
             with PcapReader(pcap_file) as pcap_reader:
                 for packet in pcap_reader:
                     processed_packets += 1
-                    if processed_packets % 10000 == 0:  # Reduced frequency for batch processing
+                    if processed_packets % 1000 == 0:  # Reduced frequency for batch processing
                         print(f"    Processed {processed_packets} packets, identified {len(flows)} flows")
                     
                     try:
