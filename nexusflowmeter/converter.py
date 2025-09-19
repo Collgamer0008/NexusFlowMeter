@@ -30,7 +30,6 @@ import logging
 # from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
-import glob
 import pandas as pd
 
 
@@ -148,7 +147,7 @@ class NetworkFlow:
             inter_arrival = (timestamp - prev_time).total_seconds() * 1000  # in ms
             self.inter_arrival_times.append(inter_arrival)
     
-    def get_flow_stats(self):
+    def get_flow_stats(self, source_file=None):
         """Calculate comprehensive flow statistics."""
         duration = (self.end_time - self.start_time).total_seconds() if self.end_time != self.start_time else 0
         total_packets = len(self.packets)
@@ -185,7 +184,7 @@ class NetworkFlow:
             elif self.syn_count == 0:
                 connection_state = "Ongoing"
         
-        return {
+        stats = {
             'flow_id': str(self.flow_key),
             'src_ip': self.flow_key.ip1,
             'dst_ip': self.flow_key.ip2,
@@ -235,26 +234,31 @@ class NetworkFlow:
             'ack_count': self.ack_count,
             'connection_state': connection_state
         }
+        
+        # Add source file information if provided
+        if source_file:
+            stats['source_file'] = os.path.basename(source_file)
+            
+        return stats
 
 
-def process_chunk_worker(chunk_file, protocols, max_flows,stream):
-        """
-        Worker used by ProcessPoolExecutor.
-        Must be at module/top-level so it is picklable for multiprocessing.
-        Returns: dict {FlowKey: NetworkFlow}
-        """
-        try:
-            converter = PCAPToFlowConverter()
-            # For chunk files we can use non-streaming (rdpcap), chunks are expected smaller:
-            if stream:
-                flows = converter.convert_chunk_to_flows_streaming(chunk_file, protocols, max_flows)
-            else:
-                flows = converter.convert_chunk_to_flows_nonstreaming(chunk_file, protocols, max_flows)
-            return flows
-        except Exception as e:
-            print(f"Worker error for {chunk_file}: {e}")
-            return {}
-
+def process_chunk_worker(chunk_file, protocols, max_flows, stream):
+    """
+    Worker used by ProcessPoolExecutor.
+    Must be at module/top-level so it is picklable for multiprocessing.
+    Returns: dict {FlowKey: NetworkFlow}
+    """
+    try:
+        converter = PCAPToFlowConverter()
+        # For chunk files we can use non-streaming (rdpcap), chunks are expected smaller:
+        if stream:
+            flows = converter.convert_chunk_to_flows_streaming(chunk_file, protocols, max_flows)
+        else:
+            flows = converter.convert_chunk_to_flows_nonstreaming(chunk_file, protocols, max_flows)
+        return flows
+    except Exception as e:
+        print(f"Worker error for {chunk_file}: {e}")
+        return {}
 
 
 class PCAPToFlowConverter:
@@ -267,6 +271,326 @@ class PCAPToFlowConverter:
         self.flow_timeout = 60  # Flow timeout in seconds
         self.max_workers = min(multiprocessing.cpu_count(), 4)  # Parallel processing workers
         
+    def find_pcap_files(self, directory):
+        """Find all PCAP files in a directory."""
+        pcap_files = []
+        directory = Path(directory)
+        
+        # Common PCAP file extensions
+        pcap_extensions = ['*.pcap', '*.pcapng', '*.cap', '*.dmp']
+        
+        for ext in pcap_extensions:
+            pcap_files.extend(directory.glob(ext))
+            # Also search case insensitive
+            pcap_files.extend(directory.glob(ext.upper()))
+        
+        # Remove duplicates and sort
+        pcap_files = sorted(list(set(pcap_files)))
+        
+        print(f"Found {len(pcap_files)} PCAP files in {directory}")
+        for pcap_file in pcap_files:
+            file_size = pcap_file.stat().st_size / (1024 * 1024)  # MB
+            print(f"  - {pcap_file.name} ({file_size:.1f} MB)")
+        
+        return pcap_files
+    
+    def process_directory_separate(self, input_dir, output_dir, protocols=None, max_flows=None, 
+                                 output_format='csv', stream=False):
+        """Process each PCAP file in directory separately."""
+        pcap_files = self.find_pcap_files(input_dir)
+        
+        if not pcap_files:
+            print(f"No PCAP files found in {input_dir}")
+            return
+        
+        # Create output directory
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        successful_conversions = 0
+        failed_conversions = []
+        
+        print(f"\nProcessing {len(pcap_files)} PCAP files separately...")
+        
+        for i, pcap_file in enumerate(pcap_files, 1):
+            try:
+                print(f"\n[{i}/{len(pcap_files)}] Processing {pcap_file.name}...")
+                
+                # Generate output filename
+                output_filename = f"{pcap_file.stem}_flows.{output_format}"
+                output_file = output_path / output_filename
+                
+                # Convert this PCAP file
+                self.convert(
+                    str(pcap_file), 
+                    str(output_file), 
+                    protocols, 
+                    max_flows,
+                    output_format,
+                    quick_preview_count=0,
+                    split_by_protocol=False,
+                    stream=stream,
+                    suppress_output=True  # Suppress detailed output for batch processing
+                )
+                
+                successful_conversions += 1
+                print(f"  -> Saved to {output_file}")
+                
+            except Exception as e:
+                print(f"  -> ERROR: Failed to process {pcap_file.name}: {e}")
+                failed_conversions.append(pcap_file.name)
+                continue
+        
+        # Summary
+        print(f"\n{'='*50}")
+        print(f"Batch Processing Summary:")
+        print(f"  Successful: {successful_conversions}/{len(pcap_files)} files")
+        print(f"  Failed: {len(failed_conversions)} files")
+        if failed_conversions:
+            print(f"  Failed files: {', '.join(failed_conversions)}")
+        print(f"  Output directory: {output_path}")
+        
+    def process_directory_merged(self, input_dir, output_dir, protocols=None, max_flows=None, 
+                               output_format='csv', stream=False):
+        """Process all PCAP files in directory and merge into single output."""
+        pcap_files = self.find_pcap_files(input_dir)
+        
+        if not pcap_files:
+            print(f"No PCAP files found in {input_dir}")
+            return
+        
+        # Create output directory
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Generate merged output filename
+        output_filename = f"merged_flows_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{output_format}"
+        output_file = output_path / output_filename
+        
+        print(f"\nProcessing {len(pcap_files)} PCAP files for merging...")
+        
+        all_flows = {}
+        all_dataframes = []
+        successful_files = 0
+        failed_files = []
+        
+        for i, pcap_file in enumerate(pcap_files, 1):
+            try:
+                print(f"\n[{i}/{len(pcap_files)}] Analyzing {pcap_file.name}...")
+                
+                # Process this PCAP file to get flows
+                file_flows = self.convert_pcap_to_flows_only(
+                    str(pcap_file), 
+                    protocols, 
+                    max_flows, 
+                    stream,
+                    source_file=str(pcap_file)
+                )
+                
+                if file_flows:
+                    # Convert flows to DataFrame with source file info
+                    flow_data = []
+                    for flow_key, flow in file_flows.items():
+                        flow_stats = flow.get_flow_stats(source_file=str(pcap_file))
+                        flow_data.append(flow_stats)
+                    
+                    if flow_data:
+                        df = pd.DataFrame(flow_data)
+                        all_dataframes.append(df)
+                        successful_files += 1
+                        print(f"  -> Found {len(flow_data)} flows")
+                    
+                    # Also merge into global flows dictionary for overall statistics
+                    for flow_key, flow in file_flows.items():
+                        if flow_key in all_flows:
+                            # Merge flows with same key from different files
+                            existing_flow = all_flows[flow_key]
+                            existing_flow.packets.extend(flow.packets)
+                            existing_flow.forward_packets += flow.forward_packets
+                            existing_flow.backward_packets += flow.backward_packets
+                            existing_flow.forward_bytes += flow.forward_bytes
+                            existing_flow.backward_bytes += flow.backward_bytes
+                            existing_flow.forward_payload_bytes += flow.forward_payload_bytes
+                            existing_flow.backward_payload_bytes += flow.backward_payload_bytes
+                            
+                            # Update time range
+                            if flow.start_time < existing_flow.start_time:
+                                existing_flow.start_time = flow.start_time
+                            if flow.end_time > existing_flow.end_time:
+                                existing_flow.end_time = flow.end_time
+                            
+                            # Merge TCP statistics
+                            existing_flow.tcp_flags.update(flow.tcp_flags)
+                            existing_flow.syn_count += flow.syn_count
+                            existing_flow.fin_count += flow.fin_count
+                            existing_flow.rst_count += flow.rst_count
+                            existing_flow.ack_count += flow.ack_count
+                            
+                            # Merge packet statistics
+                            existing_flow.inter_arrival_times.extend(flow.inter_arrival_times)
+                            existing_flow.packet_sizes.extend(flow.packet_sizes)
+                        else:
+                            all_flows[flow_key] = flow
+                
+            except Exception as e:
+                print(f"  -> ERROR: Failed to process {pcap_file.name}: {e}")
+                failed_files.append(pcap_file.name)
+                continue
+        
+        if not all_dataframes:
+            print("No flows found in any PCAP files!")
+            return
+        
+        # Merge all DataFrames
+        print(f"\nMerging flows from {successful_files} files...")
+        merged_df = pd.concat(all_dataframes, ignore_index=True)
+        
+        # Sort by total bytes (most active flows first)
+        merged_df = merged_df.sort_values('total_bytes', ascending=False).reset_index(drop=True)
+        
+        # Save merged results
+        self.save_as_format(merged_df, output_file, output_format)
+        print(f"-> Merged flows saved to: {output_file}")
+        
+        # Display summary
+        print(f"\n{'='*20} Merged Flow Analysis Summary {'='*20}")
+        print(f"*) Source files processed: {successful_files}/{len(pcap_files)}")
+        print(f"*) Total flows in merged file: {len(merged_df)}")
+        print(f"*) Unique flows across all files: {len(all_flows)}")
+        
+        if failed_files:
+            print(f"*) Failed files: {', '.join(failed_files)}")
+        
+        # Show protocol distribution
+        if len(merged_df) > 0:
+            protocol_counts = merged_df['protocol'].value_counts()
+            print(f"\n*) Protocol distribution:")
+            for protocol, count in protocol_counts.items():
+                percentage = (count / len(merged_df)) * 100
+                print(f"  {protocol:<8}: {count:>6} flows ({percentage:>5.1f}%)")
+        
+        # Show source file distribution
+        if 'source_file' in merged_df.columns:
+            print(f"\n*) Flows by source file:")
+            source_counts = merged_df['source_file'].value_counts()
+            for source, count in source_counts.items():
+                percentage = (count / len(merged_df)) * 100
+                print(f"  {os.path.basename(source):<20}: {count:>6} flows ({percentage:>5.1f}%)")
+        
+        # Save detailed report
+        report_file = output_path / f"merged_flows_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        self.save_merged_report(merged_df, report_file, pcap_files, successful_files, failed_files)
+    
+    def convert_pcap_to_flows_only(self, pcap_file, protocols=None, max_flows=None, stream=False, source_file=None):
+        """Convert PCAP to flows without saving - for internal use in batch processing."""
+        try:
+            # Check if we need to split the PCAP file
+            chunk_files = self.split_pcap_streaming(pcap_file, self.chunk_size_mb)
+            is_chunked = len(chunk_files) > 1
+            all_flows = {}
+            
+            if is_chunked and self.max_workers > 1:
+                # Use parallel processing
+                all_flows = self.process_chunks_parallel(chunk_files, stream, protocols, max_flows)
+            else:
+                # Sequential processing
+                for chunk_file in chunk_files:
+                    if stream:
+                        chunk_flows = self.convert_chunk_to_flows_streaming(chunk_file, protocols, max_flows)
+                    else:
+                        chunk_flows = self.convert_chunk_to_flows_nonstreaming(chunk_file, protocols, max_flows)
+                    
+                    # Merge flows
+                    for flow_key, flow in chunk_flows.items():
+                        if flow_key in all_flows:
+                            existing_flow = all_flows[flow_key]
+                            # Merge logic (same as in convert method)
+                            existing_flow.packets.extend(flow.packets)
+                            existing_flow.forward_packets += flow.forward_packets
+                            existing_flow.backward_packets += flow.backward_packets
+                            existing_flow.forward_bytes += flow.forward_bytes
+                            existing_flow.backward_bytes += flow.backward_bytes
+                            existing_flow.forward_payload_bytes += flow.forward_payload_bytes
+                            existing_flow.backward_payload_bytes += flow.backward_payload_bytes
+                            
+                            if flow.start_time < existing_flow.start_time:
+                                existing_flow.start_time = flow.start_time
+                            if flow.end_time > existing_flow.end_time:
+                                existing_flow.end_time = flow.end_time
+                            
+                            existing_flow.tcp_flags.update(flow.tcp_flags)
+                            existing_flow.syn_count += flow.syn_count
+                            existing_flow.fin_count += flow.fin_count
+                            existing_flow.rst_count += flow.rst_count
+                            existing_flow.ack_count += flow.ack_count
+                            
+                            existing_flow.inter_arrival_times.extend(flow.inter_arrival_times)
+                            existing_flow.packet_sizes.extend(flow.packet_sizes)
+                        else:
+                            all_flows[flow_key] = flow
+            
+            # Clean up temporary files
+            if is_chunked:
+                for chunk_file in chunk_files:
+                    if chunk_file != pcap_file:
+                        try:
+                            os.remove(chunk_file)
+                        except:
+                            pass
+                temp_dir = os.path.dirname(chunk_files[0])
+                try:
+                    os.rmdir(temp_dir)
+                except:
+                    pass
+            
+            return all_flows
+            
+        except Exception as e:
+            print(f"Error processing {pcap_file}: {e}")
+            return {}
+    
+    def save_merged_report(self, df, report_file, pcap_files, successful_files, failed_files):
+        """Save a detailed report for merged processing."""
+        with open(report_file, 'w') as f:
+            f.write("PCAP Merged Flow Analysis Report\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Analysis time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total PCAP files found: {len(pcap_files)}\n")
+            f.write(f"Successfully processed: {successful_files}\n")
+            f.write(f"Failed to process: {len(failed_files)}\n")
+            f.write(f"Total flows in merged output: {len(df)}\n\n")
+            
+            if failed_files:
+                f.write("Failed files:\n")
+                for failed_file in failed_files:
+                    f.write(f"  - {failed_file}\n")
+                f.write("\n")
+            
+            f.write("Successfully processed files:\n")
+            for pcap_file in pcap_files:
+                if pcap_file.name not in failed_files:
+                    f.write(f"  - {pcap_file.name}\n")
+            f.write("\n")
+            
+            # Protocol distribution
+            if len(df) > 0:
+                f.write("Protocol Distribution:\n")
+                f.write("-" * 30 + "\n")
+                for protocol, count in df['protocol'].value_counts().items():
+                    percentage = (count / len(df)) * 100
+                    f.write(f"  {protocol:<8}: {count:>6} flows ({percentage:>5.1f}%)\n")
+                
+                # Source file distribution
+                if 'source_file' in df.columns:
+                    f.write(f"\nFlows by Source File:\n")
+                    f.write("-" * 40 + "\n")
+                    for source, count in df['source_file'].value_counts().items():
+                        percentage = (count / len(df)) * 100
+                        source_name = os.path.basename(source)
+                        f.write(f"  {source_name:<25}: {count:>6} flows ({percentage:>5.1f}%)\n")
+        
+        print(f"-> Merged analysis report saved to: {report_file}")
+
     def get_file_size_mb(self, file_path):
         """Get file size in MB."""
         return os.path.getsize(file_path) / (1024 * 1024)
@@ -274,12 +598,11 @@ class PCAPToFlowConverter:
     def split_pcap_streaming(self, pcap_file, chunk_size_mb=1024):
         """Split large PCAP files into smaller chunks using streaming approach."""
         file_size_mb = self.get_file_size_mb(pcap_file)
-        print(f"File size: {file_size_mb:.1f} MB")
         
         if file_size_mb <= chunk_size_mb:
             return [pcap_file]
             
-        print(f"Large PCAP detected. Splitting into {chunk_size_mb}MB chunks for parallel processing...")
+        print(f"Large PCAP detected ({file_size_mb:.1f} MB). Splitting into {chunk_size_mb}MB chunks...")
         
         chunk_files = []
         temp_dir = tempfile.mkdtemp()
@@ -301,7 +624,6 @@ class PCAPToFlowConverter:
                         chunk_file = os.path.join(temp_dir, f"chunk_{chunk_num}.pcap")
                         wrpcap(chunk_file, current_chunk)
                         chunk_files.append(chunk_file)
-                        print(f"Created chunk {chunk_num}: {len(current_chunk)} packets ({current_chunk_size/1024/1024:.1f} MB)")
                         
                         # Reset for next chunk
                         current_chunk = []
@@ -313,7 +635,6 @@ class PCAPToFlowConverter:
                     chunk_file = os.path.join(temp_dir, f"chunk_{chunk_num}.pcap")
                     wrpcap(chunk_file, current_chunk)
                     chunk_files.append(chunk_file)
-                    print(f"Created final chunk {chunk_num}: {len(current_chunk)} packets ({current_chunk_size/1024/1024:.1f} MB)")
                     
         except Exception as e:
             print(f"Error during PCAP splitting: {e}")
@@ -481,17 +802,12 @@ class PCAPToFlowConverter:
                 
         return filtered_flows
 
-
-
-
-
-
     def process_chunks_parallel(self, chunk_files, stream, protocols=None, max_flows=None):
         """Process multiple chunks in parallel and merge results."""
         all_flows = {}
 
         # Prepare arguments for parallel processing
-        worker_args = [(chunk_file, protocols, max_flows,stream) for chunk_file in chunk_files]
+        worker_args = [(chunk_file, protocols, max_flows) for chunk_file in chunk_files]
 
         # Process chunks in parallel
         with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
@@ -499,8 +815,8 @@ class PCAPToFlowConverter:
 
             # Correctly submit each worker with unpacked args
             future_to_chunk = {}
-            for (chunk_file, prot, mflows, stream) in worker_args:
-                future = executor.submit(process_chunk_worker, chunk_file, prot, mflows,stream)
+            for (chunk_file, prot, mflows) in worker_args:
+                future = executor.submit(process_chunk_worker, chunk_file, prot, mflows, stream)
                 future_to_chunk[future] = chunk_file
 
             # Collect results as they complete
@@ -561,8 +877,8 @@ class PCAPToFlowConverter:
             with PcapReader(pcap_file) as pcap_reader:
                 for packet in pcap_reader:
                     processed_packets += 1
-                    if processed_packets % 1000 == 0:
-                        print(f"  Processed {processed_packets} packets, identified {len(flows)} flows")
+                    if processed_packets % 10000 == 0:  # Reduced frequency for batch processing
+                        print(f"    Processed {processed_packets} packets, identified {len(flows)} flows")
                     
                     try:
                         flow_key = self.extract_flow_key(packet)
@@ -616,8 +932,8 @@ class PCAPToFlowConverter:
             packets = rdpcap(pcap_file)  # loads all packets into memory
             for packet in packets:
                 processed_packets += 1
-                if processed_packets % 1000 == 0:
-                    print(f"  Processed {processed_packets} packets, identified {len(flows)} flows")
+                if processed_packets % 10000 == 0:  # Reduced frequency for batch processing
+                    print(f"    Processed {processed_packets} packets, identified {len(flows)} flows")
 
                 try:
                     flow_key = self.extract_flow_key(packet)
@@ -659,7 +975,8 @@ class PCAPToFlowConverter:
         return flows
     
     def convert(self, pcap_file, output_file, protocols=None, max_flows=None, 
-                output_format='csv', quick_preview_count=0, split_by_protocol=False,stream=False):
+                output_format='csv', quick_preview_count=0, split_by_protocol=False, 
+                stream=False, suppress_output=False):
         """Convert PCAP file to flow-based analysis."""
         start_time = datetime.now()
         
@@ -667,19 +984,20 @@ class PCAPToFlowConverter:
             # Check if we need to split the PCAP file
             chunk_files = self.split_pcap_streaming(pcap_file, self.chunk_size_mb)
             is_chunked = len(chunk_files) > 1
-            
+            all_flows = {}
 
             if is_chunked and self.max_workers > 1:
                 # Use the parallel path that leverages ProcessPoolExecutor
-                print(f"Running parallel flow conversion with {self.max_workers} workers...")
+                if not suppress_output:
+                    print(f"Running parallel flow conversion with {self.max_workers} workers...")
                 all_flows = self.process_chunks_parallel(chunk_files, stream, protocols, max_flows)
             
             else:
-                all_flows = {}
                 # Sequential path (existing behavior)
-                print("Running sequential flow conversion...")
+                if not suppress_output:
+                    print("Running sequential flow conversion...")
                 for i, chunk_file in enumerate(chunk_files, 1):
-                    if is_chunked:
+                    if is_chunked and not suppress_output:
                         print(f"\nAnalyzing flows in chunk {i}/{len(chunk_files)}...")
 
                     if stream:
@@ -718,10 +1036,11 @@ class PCAPToFlowConverter:
                         else:
                             all_flows[flow_key] = flow
 
-                    print(f"Found {len(chunk_flows)} flows in chunk {i}")
+                    if not suppress_output:
+                        print(f"Found {len(chunk_flows)} flows in chunk {i}")
                 
-            
-            print(f"\n*) Total unique flows identified: {len(all_flows)}")
+            if not suppress_output:
+                print(f"\n*) Total unique flows identified: {len(all_flows)}")
             
             # Clean up temporary files
             if is_chunked:
@@ -763,15 +1082,18 @@ class PCAPToFlowConverter:
             else:
                 # Save single file
                 self.save_as_format(final_df, output_file, output_format)
-                print(f"-> Flow analysis saved to: {output_file}")
+                if not suppress_output:
+                    print(f"-> Flow analysis saved to: {output_file}")
             
             # Display summary statistics
-            self.display_summary(final_df)
+            if not suppress_output:
+                self.display_summary(final_df)
             
             # Save processing report
-            processing_time = (datetime.now() - start_time).total_seconds()
-            report_file = Path(output_file).parent / f"{Path(output_file).stem}_flow_report.txt"
-            self.save_report(final_df, report_file, pcap_file, protocols, processing_time)
+            if not suppress_output:
+                processing_time = (datetime.now() - start_time).total_seconds()
+                report_file = Path(output_file).parent / f"{Path(output_file).stem}_flow_report.txt"
+                self.save_report(final_df, report_file, pcap_file, protocols, processing_time)
             
         except FileNotFoundError:
             print(f" Error: PCAP file '{pcap_file}' not found")
