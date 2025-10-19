@@ -295,7 +295,7 @@ class PCAPToFlowConverter:
         return pcap_files
     
     def process_directory_separate(self, input_dir, output_dir, protocols=None, max_flows=None, 
-                                 output_format='csv', stream=False):
+                                 output_format='csv', stream=False, report_dir=None):
         """Process each PCAP file in directory separately."""
         pcap_files = self.find_pcap_files(input_dir)
         
@@ -330,7 +330,8 @@ class PCAPToFlowConverter:
                     quick_preview_count=0,
                     split_by_protocol=False,
                     stream=stream,
-                    suppress_output=True  # Suppress detailed output for batch processing
+                    suppress_output=True,  # Suppress detailed output for batch processing
+                    report_dir=report_dir
                 )
                 
                 successful_conversions += 1
@@ -351,7 +352,7 @@ class PCAPToFlowConverter:
         print(f"  Output directory: {output_path}")
         
     def process_directory_merged(self, input_dir, output_dir, protocols=None, max_flows=None, 
-                               output_format='csv', stream=False):
+                               output_format='csv', stream=False, report_dir=None):
         """Process all PCAP files in directory and merge into single output."""
         pcap_files = self.find_pcap_files(input_dir)
         
@@ -478,7 +479,12 @@ class PCAPToFlowConverter:
                 print(f"  {os.path.basename(source):<20}: {count:>6} flows ({percentage:>5.1f}%)")
         
         # Save detailed report
-        report_file = output_path / f"merged_flows_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        if report_dir:
+            report_path = Path(report_dir)
+            report_path.mkdir(parents=True, exist_ok=True)
+            report_file = report_path / f"merged_flows_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        else:
+            report_file = output_path / f"merged_flows_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         self.save_merged_report(merged_df, report_file, pcap_files, successful_files, failed_files)
     
     def convert_pcap_to_flows_only(self, pcap_file, protocols=None, max_flows=None, stream=False, source_file=None):
@@ -976,7 +982,7 @@ class PCAPToFlowConverter:
     
     def convert(self, pcap_file, output_file, protocols=None, max_flows=None, 
                 output_format='csv', quick_preview_count=0, split_by_protocol=False, 
-                stream=False, suppress_output=False):
+                stream=False, suppress_output=False, report_dir=None):
         """Convert PCAP file to flow-based analysis."""
         start_time = datetime.now()
         
@@ -1092,7 +1098,13 @@ class PCAPToFlowConverter:
             # Save processing report
             if not suppress_output:
                 processing_time = (datetime.now() - start_time).total_seconds()
-                report_file = Path(output_file).parent / f"{Path(output_file).stem}_flow_report.txt"
+                if report_dir:
+                    report_path = Path(report_dir)
+                    report_path.mkdir(parents=True, exist_ok=True)
+                    report_file = report_path / f"{Path(output_file).stem}_flow_report.txt"
+                else:
+                    report_file = Path(output_file).parent / f"{Path(output_file).stem}_flow_report.txt"
+    
                 self.save_report(final_df, report_file, pcap_file, protocols, processing_time)
             
         except FileNotFoundError:

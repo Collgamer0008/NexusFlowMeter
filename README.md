@@ -218,6 +218,8 @@ options:
                         
   --max-workers MAX_WORKERS               Maximum parallel workers for chunk processing (default: 4)
                         
+  --report-dir DIRECTORY               Directory to save analysis reports (default: in the same directory as csv)
+
   --verbose                               Enable verbose logging
 
 ```
@@ -233,6 +235,7 @@ options:
 | `output_file` | Output file path (for single file processing) |
 | `-d /folder_path/` | Input folder path containing PCAPs (for multiple file processing) |
 | `-c /folder_path/` | Output folder path for extracted CSVs (for multiple file processing) |
+| `--report-dir /folder_path/` | Directory to save analysis reports (default: in the same directory as csv) |
 
 Examples
 ```bash
@@ -243,6 +246,9 @@ Examples
       nexusflowmeter -d ./pcaps/ -c ./out/                    # Convert each PCAP in the folder to separate CSV
       nexusflowmeter -d ./pcaps/ -c ./out/ --merge            # Merge all PCAPs into one CSV
       nexusflowmeter -d ./pcaps/ -c ./out/ --output-format json  # Convert to JSON format
+
+    Save report to desired location:
+      nexusflowmeter capture.pcap flows.csv --report-dir ./reports/
 ```
 
 ### Options
@@ -262,6 +268,7 @@ Examples
 | `--chunk-size CHUNK_SIZE` | Chunk size in MB for large files (default: `1024MB = 1GB`) |
 | `--flow-timeout FLOW_TIMEOUT` | Flow timeout in seconds (default: `60`) |
 | `--max-workers MAX_WORKERS` | Maximum parallel workers for chunk processing (default: `4`) |
+| `--report-dir DIRECTORY` | Directory to save analysis reports (default: in the same directory as csv) |
 | `--verbose` | Enable verbose logging |
 
 Examples

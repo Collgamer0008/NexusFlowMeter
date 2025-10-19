@@ -117,6 +117,11 @@ Examples:
         default=min(multiprocessing.cpu_count(), 4),
         help=f'Maximum parallel workers for chunk processing (default: {min(multiprocessing.cpu_count(), 4)})'
     )
+
+    parser.add_argument(
+        '--report-dir',
+        help='Directory to save analysis reports (default: same as output file)'
+    )
     
     parser.add_argument(
         '--verbose',
@@ -204,7 +209,8 @@ Examples:
                 protocols,
                 args.max_flows,
                 args.output_format,
-                args.stream
+                args.stream,
+                report_dir=args.report_dir
             )
         else:
             converter.process_directory_separate(
@@ -213,7 +219,8 @@ Examples:
                 protocols,
                 args.max_flows,
                 args.output_format,
-                args.stream
+                args.stream,
+                report_dir=args.report_dir
             )
     else:
         # Single file processing
@@ -243,7 +250,8 @@ Examples:
             args.output_format,
             args.quick_preview,
             args.split_by_protocol,
-            stream=args.stream 
+            stream=args.stream,
+            report_dir=args.report_dir
         )
     
     print(f"\n Flow analysis completed successfully!")
