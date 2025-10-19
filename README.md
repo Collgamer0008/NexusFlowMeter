@@ -168,7 +168,7 @@ pip install nexusflowmeter
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/NexusFlowMeter.git
+git clone https://github.com/Collgamer0008/NexusFlowMeter.git
 cd NexusFlowMeter
 pip install -r requirements.txt
 
